@@ -1,12 +1,18 @@
 var
 	net = require('net')
+	, jspack = require('./addons/jspack.js')
 	, Binary = require('binary')
-	, zlib = require('./addons/zlib')
+//	, zlib = require('./addons/zlib/zlib.node')
 	, sys = require('sys')
-	//, remote = ['localhost', 25565]
+//	, remote = ['localhost', 25565]
 	, remote = ['anarchy.gleany.com', 25565]
+//	, remote = ['creative.nerd.nu', 25565]
 	;
-
+var count = 1;
+var messageWaiting = 0;
+var messageToSend = new Array();
+var playerLocation = new Array();
+var entityIDs = new Array();
 function appendBuf(buf1, buf2) {
 	if (!buf1 || !buf1.length)
 		return buf2;
@@ -19,14 +25,29 @@ function appendBuf(buf1, buf2) {
 	buf2.copy(newBuf, buf1.length, 0, buf2.length);
 	return newBuf;
 }
-
+function sendToClient(message, sLocal){
+	try{
+		message = "§4" + message;
+	var buf = appendBuf(new Buffer([0x03, (message.length >> 8), message.length]), new Buffer(message));
+	//for (i = 0; i < buf.length; i++ )
+	   // sys.debug(buf[i]);
+        
+ 		sLocal.write(buf);
+		sLocal.pause();
+		sLocal.resume();
+	} catch(e){
+     sys.debug(e);
+	}
+}
 var lastMessage;
+var start = 0;
 
 function out1(s, p, len) {
 	lastMessage = s;
-	//sys.debug(s);
+//	sys.debug(s);
 }
-
+var items;
+var players = new Array();
 var itemIDs =
 	{ 0 : 'air'
 	, 1 : 'stone'
@@ -226,7 +247,7 @@ var serverToClient =
 		/* Login request */
 		function(buf, state) {
 			var p = Binary.parse(buf);
-			p
+			p   
 				.word32bs('entity_id')
 				.word16bs('len_unused_1')
 				.buffer('unused_1', p.vars.len_unused_1)
@@ -287,8 +308,20 @@ var serverToClient =
 
 			if (p.vars.msg.length != p.vars.len_msg)
 				return -1;
-
-
+            
+            if (new String(p.vars.msg).match("Connected players"))
+			{
+				str = "";
+				for(i = 0; i < entityIDs.length; i++){
+				   var eid = entityIDs[i];
+				   sys.debug(eid);
+				   var player = playerLocation[eid];
+				   str = (player['name'] + ":" + player['x'] + "," + player['y'] + "," + player['z'] + " "); 
+			       messageToSend.push(str);
+				}
+				sys.debug(str);
+				messageWaiting = 1; 
+			}
 			var len = 2 + p.vars.len_msg;
 			out1('chat', p, len);
 			return len;
@@ -323,7 +356,7 @@ var serverToClient =
 
 			if (p.vars.unused === null)
 				return -1;
-
+            sys.debug(players[p.vars.entity_id] + ' Wearing ' + itemIDs[p.vars.item_id]);
 			var len = 4 + 2 + 2 + 2;
 			out1('entity equipped', p, len);
 			return len;
@@ -385,7 +418,6 @@ var serverToClient =
 
 			if (p.vars.on_ground === null)
 				return -1;
-
 			var len = 8 + 8 + 8 + 8 + 4 + 4 + 1;
 			out1('player position', p, len);
 			return len;
@@ -409,14 +441,14 @@ var serverToClient =
 		/* ??? */
 		function(buf, state) {
 			var p = Binary.parse(buf);
-			p
-				.word32bs('unknown_1')
-				.word8bs('unknown_2')
-				.word32bs('unknown_3')
-				.word8bs('unknown_4')
-				.word32bs('unknown_5')
+			p                                           
+				.word32bs('entity_id')
+				.word8bs('in_bed')
+				.word32bs('x')
+				.word8bs('y')
+				.word32bs('z')
 				;
-
+                sys.debug('Bed used by [' + p.vars.entity_id  + ']' + players[p.vars.entity_id] +  p.vars.x + ", " + p.vars.y );
 			if (p.vars.unknown_5 === null)
 				return -1;
 
@@ -473,9 +505,28 @@ var serverToClient =
 				.word16bs('holding')
 				;
 
+				players[p.vars.entity_id] = p.vars.name;	
+				var vars = new Array();
+				vars[0] = p.vars.x;
+				vars[1] = p.vars.y;
+				vars[2] = p.vars.z;
+				var bytes = new Array();
+				for (j = 0; j < 3; j++){
+				    bytes[j] = new Array();
+					for (i = 3; i >= 1; i--){
+					   bytes[j][i] = vars[j] & (255);
+					   vars[j] = vars[j] >> 8;
+					   //sys.debug(bytes[j][i]);
+				}
+				}
+
+			sys.debug('Player: ' + p.vars.name + '(' + p.vars.x/32  + ',' + p.vars.y/32 + ',' + p.vars.z/32 + ")");
+            playerLocation[p.vars.entity_id] = {'name' : p.vars.name, 'x' : p.vars.x/32, 'y' : p.vars.y/32, 'z': p.vars.z/32};
+		    entityIDs.push(p.vars.entity_id);
 			if (p.vars.holding === null)
 				return -1;
-
+            if (count > 100)
+			;
 			var len = 4 + 2 + p.vars.len_name + 4 + 4 + 4 + 1 + 1 + 2;
 			out1('named entity spawn', p, len);
 			return len;
@@ -585,7 +636,7 @@ var serverToClient =
 				return -1;
 
 			var len = 4 + 2 + p.vars.len_title + 4 + 4 + 4 + 4;
-			out1('painting', p, len);
+			out1('painting', p, len);                   
 			return len;
 		}
 
@@ -653,6 +704,17 @@ var serverToClient =
 
 			if (p.vars.rel_z === null)
 				return -1;
+            if (players[p.vars.entity_id]!=null && (p.vars.rel_x!=0 || p.vars.rel_y!=0 || p.vars.rel_z!=0)){
+				playerLocation[p.vars.entity_id]['x'] += p.vars.rel_x/32;
+                playerLocation[p.vars.entity_id]['y'] += p.vars.rel_y/32;
+                playerLocation[p.vars.entity_id]['z'] += p.vars.rel_z/32;
+               
+				//sys.debug(players[p.vars.entity_id] + " " + p.vars.rel_x + "," + p.vars.rel_z);
+				if (count%50==0)sys.debug(players[p.vars.entity_id] + ": (" +  playerLocation[p.vars.entity_id]['x'] + "," + playerLocation[p.vars.entity_id]['y'] + "," + playerLocation[p.vars.entity_id]['z'] + ")");
+		     count++;
+			if (count > 500){
+			}
+			}
 
 			var len = 4 + 1 + 1 + 1;
 			out1('entity relative move', p, len);
@@ -692,9 +754,16 @@ var serverToClient =
 
 			if (p.vars.pitch === null)
 				return -1;
-
+             if (players[p.vars.entity_id]!=null && (p.vars.rel_x!=0 || p.vars.rel_y!=0 || p.vars.rel_z!=0)){
+				playerLocation[p.vars.entity_id]['x'] += p.vars.rel_x/32;
+                playerLocation[p.vars.entity_id]['y'] += p.vars.rel_y/32;
+                playerLocation[p.vars.entity_id]['z'] += p.vars.rel_z/32;
+                 if (count%50==0)
+				sys.debug(players[p.vars.entity_id] + ": (" +  playerLocation[p.vars.entity_id]['x'] + "," + playerLocation[p.vars.entity_id]['y'] + "," + playerLocation[p.vars.entity_id]['z'] + ")");
+			}
 			var len = 4 + 1 + 1 + 1 + 1 + 1;
 			out1('entity look & move', p, len);
+			count++;
 			return len;
 		}
 
@@ -713,7 +782,8 @@ var serverToClient =
 
 			if (p.vars.pitch === null)
 				return -1;
-
+                sys.debug('Teleport: ' + players[p.vars.entity_id] + '(' + p.vars.x/32  + ',' + p.vars.y/32 + ',' + p.vars.z/32 + ")");
+            	playerLocation[p.vars.entity_id] = {'name': players[p.vars.entity_id] , 'x': p.vars.x/32, 'y': p.vars.y/32, 'z': p.vars.z/32};
 			var len = 4 + 4 + 4 + 4 + 1 + 1;
 			out1('entity teleport', p, len);
 			return len;
@@ -792,9 +862,10 @@ var serverToClient =
 
 			if (p.vars.raw_data.length < p.vars.len_data)
 				return -1;
-
-			p.vars.data = zlib.inflate(p.vars.raw_data);
-
+		    //sys.debug(p.vars.raw_data);
+            /*
+		    p.vars.data = zlib.inflate(p.vars.raw_data);
+            sys.debug('inflated');
 			var numBlocks =
 				(p.vars.size_x + 1)
 				* (p.vars.size_y + 1)
@@ -803,7 +874,7 @@ var serverToClient =
 				
 			var expectedSize = numBlocks * 2.5;
 
-			if (expectedSize != p.vars.data.length) {
+		    if (expectedSize != p.vars.data.length) {
 				sys.debug('PROTOCOL ERROR: Expected ' + expectedSize + ', got ' + p.vars.data.length);
 				process.exit(1);
 			}
@@ -836,7 +907,7 @@ var serverToClient =
 			}
 
 			//sys.debug(sys.inspect(iLocs));
-
+              */
 			var len = 4 + 2 + 4 + 1 + 1 + 1 + 4 + p.vars.len_data;
 			out1('map chunk', p, len);
 			return len;
@@ -1105,8 +1176,8 @@ var serverToClient =
 			p.vars.second = pad(p.vars.second.toString());
 			p.vars.third = pad(p.vars.third.toString());
 			p.vars.fourth = pad(p.vars.fourth.toString());
-
-			sys.debug('\n==================\n=' + p.vars.first + '=\n=' + p.vars.second + '=\n=' + p.vars.third + '=\n=' + p.vars.fourth + '= @ ' + p.vars.x + ', ' + p.vars.y + ', ' + p.vars.z + '\n==================');
+            
+		    //sys.debug(p.vars.first + '=' + p.vars.second + '=' + p.vars.third + '=' + p.vars.fourth + '=\n ' + p.vars.x + ', ' + p.vars.y + ', ' + p.vars.z);
 
 			var len = 4 + 2 + 4 
 				+ 2 + p.vars.len_first
@@ -1146,10 +1217,11 @@ net.createServer(function(sLocal) {
 	var outBuf = null;
 
 	sys.debug('Connecting to remote');
-
+    
 	sRemote = net.createConnection(remote[1], remote[0]);
 
 	sLocal.on('data', function(d) {
+
 		sRemote.write(d);
 	});
 
@@ -1157,7 +1229,9 @@ net.createServer(function(sLocal) {
 		sys.debug('Ending connection to remote');
 		sRemote.end();
 	});
-
+    sLocal.on('error', function(e) {
+       sys.debug('Error on ' + lastMessage); 
+	});
 	sRemote.on('data', function(d) {
 		if (typeof(d) === 'string')
 			d = new Buffer(d, 'ascii');
@@ -1168,6 +1242,7 @@ net.createServer(function(sLocal) {
 		 * version of node that I'm running which causes
 		 * it to fuck up if the thing isn't in the stream...
 		 * so introduce some delay */
+	    var lastPacketID = -1, bytesRead = -1;
 		while (outBuf.length > 3000) {
 			var p = Binary.parse(outBuf)
 				.word8bu('packetID')
@@ -1184,15 +1259,16 @@ net.createServer(function(sLocal) {
 
 			if (p.packetID !== null) {
 				var handler = serverToClient[p.packetID];
-
+                if (p.packetID === 0x33)
+                    bytesRead = -1;
 				if (handler === undefined) {
 					sys.debug('Unknown packet ' + p.packetID);
 					sys.debug('Last message ' + lastMessage);
 					return sLocal.end();
 				}
 
-				var read = handler(outBuf.slice(1, outBuf.length), {});
-
+				var read = handler(outBuf.slice(1, outBuf.length), {0: sLocal});
+                bytesRead = read; 
 				if (read === undefined) {
 					sys.debug('Unhandled packet ' + p.packetID);
 					sys.debug('Last message ' + lastMessage);
@@ -1200,15 +1276,27 @@ net.createServer(function(sLocal) {
 				}
 
 				if (read > -1) {
+					
+					lastPacketID = p.packetID;
 					outBuf = outBuf.slice(read + 1, outBuf.length);
+
 				}
 				else if (read === -1) {
+	   			    bytesRead = -1;
 					break;
 				}
 			}
 		}
-
+                         
+		                                 
 		sLocal.write(d);
+
+		if (lastPacketID === 0x1D)
+			sys.debug(lastPacketID + "  " + bytesRead);
+		if (messageToSend.length > 0 && bytesRead > -1 && lastPacketID > 0 && lastPacketID == 0x03){
+			sendToClient(messageToSend.pop(),sLocal);
+		}
+			
 	});
 
 	sRemote.on('end', function() {

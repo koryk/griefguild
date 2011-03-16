@@ -26,8 +26,7 @@ Handle<Value> inflate(const Arguments &args) {
 
 	const size_t CHUNK = 1024 * 1024 * 5;
 	unsigned char *out = new unsigned char[CHUNK];
-
-	Buffer *buf = ObjectWrap::Unwrap<Buffer>(args[0]->ToObject());
+	Buffer *buf = ObjectWrap::Unwrap<Buffer>(args.This());
 
 	strm.avail_in = buf->length();
 	strm.next_in = (unsigned char*) buf->data();
